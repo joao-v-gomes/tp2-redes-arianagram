@@ -17,4 +17,7 @@ int connectToServer(char *server_ip, int server_port, char *username);
 int validateInfoToConnectToServer(char *server_ip, int server_port, char *username);
 int readMessageFromServer(int client_socket, Message *msg);
 
+char *getUsername();
+void setUsername(char *new_username);
+
 #endif // CLIENT_H

@@ -35,4 +35,12 @@ int waitForClientConnection(int server_socket);
 int readMessageFromClient(int client_socket, Message *msg);
 int sendMessageToClient(int client_socket, Message *msg);
 
+bool processPostMessage(Message *msg);
+bool processFollowMessage(Message *msg);
+bool processReadMessage(Message *msg);
+void sendFeedToClient(int client_socket);
+int getSocketByUsername(char *username);
+void addMsgToFeed(Message *msg);
+void incrementMsgIdCounter();
+
 #endif // SERVER_H

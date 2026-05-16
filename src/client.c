@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <ctype.h>
+#include <stdbool.h>
 #include "util.h"
 #include "client.h"
 
@@ -17,15 +18,17 @@ int argc_counter;
 int state;
 int client_socket;
 char user_input[256];
+char username[USER_SIZE];
 
 // Estruturas para armazenar as mensagens enviadas e recebidas. Uma de cada vez...
 Message msg_sent;
+Message msg_to_send;
 Message msg_received;
 
 // Se conecta ao servidor usando o IP e a porta fornecidos. Retorna o socket do cliente ou ERROR em caso de falha.
 // Testa a conexao IpV4 primeiro, se falhar tenta o IPv6. Se ambos falharem, retorna ERROR.
-int connectToServer(char *server_ip, int server_port, char *username) {
-    if(validateInfoToConnectToServer(server_ip, server_port, username) != 0) {
+int connectToServer(char *server_ip, int server_port, char *user_name) {
+    if(validateInfoToConnectToServer(server_ip, server_port, user_name) != 0) {
         return ERROR;
     }
 
@@ -47,6 +50,7 @@ int connectToServer(char *server_ip, int server_port, char *username) {
             return ERROR;
         }
 
+        setUsername(user_name);
         return client_socket;
     }
 
@@ -68,6 +72,7 @@ int connectToServer(char *server_ip, int server_port, char *username) {
 #ifdef DEBUG
         printf("Conectado ao servidor %s na porta %d usando IPv6.\n", server_ip, server_port);
 #endif  
+        setUsername(user_name);
         return client_socket;
     }
 
@@ -139,49 +144,69 @@ int readMessageFromServer(int client_socket, Message *msg) {
     return OK;
 }
 
+
 bool validateUserInput(char *input) {
     // Aqui você pode implementar a validação da entrada do usuário
     // Por exemplo, verificar se o comando é "post", "follow" ou "read" e se os argumentos estão corretos
     // Retorna true se a entrada for válida ou false caso contrário
+    char *input_temp = strdup(input); // Cria uma cópia da entrada para tokenização
 
-    //verifica se a primeira palavra é um comando válido: POST, FOLLOW ou READ
-    char *command = strtok(input, " ");
+    // verifica se a primeira palavra é um comando válido: POST, FOLLOW ou READ
+    char *command = strtok(input_temp, " ");
     if (command == NULL) {
+        free(input_temp);
         return false;
     }
 
     if (strcmp(command, "POST") != 0 && strcmp(command, "FOLLOW") != 0 && strcmp(command, "READ") != 0) {
+        free(input_temp);
         return false;
     }
 
-    //Verfica se o comando é POST e se tem um conteúdo válido
+    // Verifica se o comando é POST e se tem um conteúdo válido
     if (strcmp(command, "POST") == 0) {
         char *content = strtok(NULL, "");
         if (content == NULL || strlen(content) == 0 || strlen(content) >= CONTENT_SIZE) {
+            free(input_temp);
             return false;
         }
+        msg_to_send.type = MSG_POST;
     }
 
-    //Verifica se o comando é FOLLOW e se tem um username válido
+    // Verifica se o comando é FOLLOW e se tem um username válido
     if (strcmp(command, "FOLLOW") == 0) {
         char *target_username = strtok(NULL, " ");
         if (target_username == NULL || strlen(target_username) == 0 || strlen(target_username) >= USER_SIZE) {
+            free(input_temp);
             return false;
         }
+        msg_to_send.type = MSG_FOLLOW;
     }
 
-    //Verifica se o comando é READ e se não tem argumentos extras
+    // Verifica se o comando é READ e se não tem argumentos extras
     if (strcmp(command, "READ") == 0) {
         char *extra = strtok(NULL, " ");
         if (extra != NULL) {
+            free(input_temp);
             return false;
         }
+        msg_to_send.type = MSG_READ;
     }
-    
+
 #ifdef DEBUG
     printf("Entrada do usuário válida: %s\n", input);
 #endif
+    free(input_temp);
     return true;
+}
+
+char *getUsername() {
+    return username;
+}
+
+void setUsername(char *new_username) {
+    strncpy(username, new_username, USER_SIZE - 1);
+    username[USER_SIZE - 1] = '\0'; // Garantir terminação nula
 }
 
 int main(int argc, char **argv) {
@@ -242,19 +267,25 @@ int main(int argc, char **argv) {
                 // Aqui você pode implementar a validação da entrada do usuário
                 // Se a entrada for válida, defina o tipo da mensagem e o conteúdo apropriado
                 // Por exemplo, se o usuário digitar "post Hello World", você pode definir msg_sent.type = MSG_POST e msg_sent.content = "Hello World"
-                validateUserInput(user_input);
+                if (!validateUserInput(user_input)) {
+                    printf("Entrada inválida. Tente novamente.\n");
+                    state = WAIT_USER_INPUT_STATE;
+                    break;
+                }
+                else {
+                    strcpy(msg_to_send.username, getUsername());
+                    strncpy(msg_to_send.content, user_input, CONTENT_SIZE - 1);
+                    msg_to_send.content[CONTENT_SIZE - 1] = '\0'; // Garantir terminação nula
 
-                // Para fins de demonstração, vamos assumir que toda entrada é um post
-                msg_sent.type = MSG_POST;
-                strncpy(msg_sent.content, user_input, CONTENT_SIZE - 1);
-                msg_sent.content[CONTENT_SIZE - 1] = '\0'; // Garantir terminação nula
-
-                state = SEND_MSG_TO_SERVER_STATE;
-                break;
+                    state = SEND_MSG_TO_SERVER_STATE;
+                    break;
+                }
             }
 
             case SEND_MSG_TO_SERVER_STATE: {
-                if (send(client_socket, &msg_sent, sizeof(msg_sent), 0) < 0) {
+                printMsg(&msg_to_send);
+
+                if (send(client_socket, &msg_to_send, sizeof(msg_to_send), 0) < 0) {
                     return ERROR;
                 }
 

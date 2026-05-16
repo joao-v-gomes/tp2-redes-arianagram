@@ -7,6 +7,8 @@
 #include <sys/socket.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdio.h>
+#include <stdbool.h>
 
 #define OK 0
 #define ERROR -1
@@ -58,5 +60,6 @@ typedef struct {
 
 void messageHostToNetwork(Message *msg);
 void messageNetworkToHost(Message *msg);
+void printMsg(Message *msg);
 
 #endif // UTIL_H

@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include "util.h"
@@ -23,12 +24,21 @@ int code = 0;
 uint32_t msg_id_counter = 0;
 pthread_mutex_t msg_id_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-// Array com os clientes conectados. O servidor deve ser capaz de lidar com até 5 clientes simultaneamente.(por enquanto)
+// Array com os clientes conectados.
+// O servidor deve ser capaz de lidar com até 5 clientes simultaneamente.(por enquanto).
 client_t clients[MAX_CLIENTS];
 
 // Mutex para proteger o acesso ao array de clientes
 // vou precisar iterar sobre esse array varias vezes...
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Array com as mensagens do feed.
+// O feed eh circular, ou seja, quando chegar na última posição do array, a próxima mensagem deve ser inserida na primeira posição, sobrescrevendo a mensagem mais antiga.
+Message feed_messages[FEED_MAX_SIZE];
+
+//Mutex para proteger o acesso ao array de mensagens do feed
+pthread_mutex_t feed_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 
 
 
@@ -283,25 +293,48 @@ void* handleClientConnection(void *arg) {
             break;
         
         case WAITING_FOR_MESSAGE:
-            if (readMessageFromClient(client_fd, &msg_received) != OK) {
+            if (readMessageFromClient(client_fd, &msg_received) == OK) {
                 thread_state = RECEIVED_MSG;
 
             }
             break;
 
         case RECEIVED_MSG:
+
+            // Insere o username do cliente na mensagem recebida para facilitar o debug e o processamento das mensagens.
+            // O username do cliente é armazenado na estrutura do cliente no array global, 
+            // então precisamos acessar o array global de clientes de forma sincronizada para pegar 
+            // o username do cliente que enviou a mensagem.
+            pthread_mutex_lock(&clients_mutex);
+            if (client_index >= 0 && client_index < MAX_CLIENTS && clients[client_index].active) {
+                // If this is the first message from the client, store the username sent in the message
+                if (clients[client_index].username[0] == '\0' && msg_received.username[0] != '\0') {
+                    strncpy(clients[client_index].username, msg_received.username, USER_SIZE - 1);
+                    clients[client_index].username[USER_SIZE - 1] = '\0';
+                }
+                // If we already have a stored username for this client, prefer it for server-side logs
+                if (clients[client_index].username[0] != '\0') {
+                    strncpy(msg_received.username, clients[client_index].username, USER_SIZE - 1);
+                    msg_received.username[USER_SIZE - 1] = '\0';
+                }
+            }
+            pthread_mutex_unlock(&clients_mutex);
+
             switch (msg_received.type)
             {
             case MSG_POST:
                 printf("Recebida mensagem de POST do cliente %s: %s\n", msg_received.username, msg_received.content);
+                thread_state = RECEIVED_MSG_POST;
                 break;
             
             case MSG_FOLLOW:
                 printf("Recebida mensagem de FOLLOW do cliente %s: %s\n", msg_received.username, msg_received.content);
+                thread_state = RECEIVED_MSG_FOLLOW;
                 break;
 
             case MSG_READ:
                 printf("Recebida mensagem de READ do cliente %s\n", msg_received.username);
+                thread_state = RECEIVED_MSG_READ;
                 break;
 
             default:
@@ -309,23 +342,34 @@ void* handleClientConnection(void *arg) {
                 break;
             }
 
+            break;
+
         case RECEIVED_MSG_POST:
             printf("Processando mensagem de POST do cliente %s: %s\n", msg_received.username, msg_received.content);
+            processPostMessage(&msg_received);
             thread_state = WAITING_FOR_MESSAGE;
             break;
         
         case RECEIVED_MSG_FOLLOW:
             printf("Processando mensagem de FOLLOW do cliente %s: %s\n", msg_received.username, msg_received.content);
+            processFollowMessage(&msg_received);
             thread_state = WAITING_FOR_MESSAGE;
             break;
         
         case RECEIVED_MSG_READ:
             printf("Processando mensagem de READ do cliente %s\n", msg_received.username);
+            processReadMessage(&msg_received);
             thread_state = WAITING_FOR_MESSAGE;
             break;
 
         case SEND_MSG_TO_CLIENT:
             printf("Enviando mensagem de resposta para o cliente %s\n", msg_received.username);
+            if (sendMessageToClient(client_fd, &msg_to_send) == OK) {
+                printf("Mensagem enviada para o cliente %s: %s\n", msg_received.username, msg_to_send.content);
+            }
+            else{
+                printf("Erro ao enviar mensagem para o cliente %s\n", msg_received.username);
+            }
             thread_state = WAITING_FOR_MESSAGE;
             break;
 
@@ -333,6 +377,103 @@ void* handleClientConnection(void *arg) {
             break;
         }
     }
+}
+
+void incrementMsgIdCounter() {
+    pthread_mutex_lock(&msg_id_mutex);
+    msg_id_counter++;
+    pthread_mutex_unlock(&msg_id_mutex);
+}
+
+// Preenche o feed com a nova mensagem, removendo a mensagem mais antiga se o feed estiver cheio.
+void addMsgToFeed(Message *msg) {
+    pthread_mutex_lock(&feed_mutex);
+    // Shift das mensagens para a direita para abrir espaço para a nova mensagem no início do array
+    for (int i = FEED_MAX_SIZE - 1; i > 0; i--) {
+        feed_messages[i] = feed_messages[i - 1];
+    }
+    feed_messages[0] = *msg;
+    pthread_mutex_unlock(&feed_mutex);
+}
+
+void sendFeedToClient(int client_socket) {
+    pthread_mutex_lock(&feed_mutex);
+    for (int i = 0; i < FEED_MAX_SIZE; i++) {
+        if (feed_messages[i].msg_id != 0) { // Verifica se a posição do feed está ocupada por uma mensagem válida
+            Message msg_to_send = feed_messages[i];
+            msg_to_send.type = MSG_PUSH; // Define o tipo da mensagem como PUSH para indicar que é uma notificação do feed
+            messageHostToNetwork(&msg_to_send);
+            send(client_socket, &msg_to_send, sizeof(Message), 0);
+        }
+    }
+    pthread_mutex_unlock(&feed_mutex);
+}
+
+// Usa o username para pesquisar o socket do cliente e retorna o socket.
+int getSocketByUsername(char *username) {
+#ifdef DEBUG
+    printf("Procurando socket para o cliente %s\n", username);
+#endif
+
+    pthread_mutex_lock(&clients_mutex);
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i].active && strcmp(clients[i].username, username) == 0) {
+            int socket = clients[i].client_fd;
+            pthread_mutex_unlock(&clients_mutex);
+#ifdef DEBUG
+            printf("Socket encontrado! \n");
+#endif
+            return socket;
+        }
+    }
+    pthread_mutex_unlock(&clients_mutex);
+    return ERROR; // Retorna ERROR se o cliente não for encontrado
+}
+
+bool processPostMessage(Message *msg) {
+    // Aqui você pode implementar o processamento da mensagem de POST
+    // Por exemplo, armazenar a mensagem em uma estrutura de dados no servidor ou enviar notificações para os seguidores do usuário que postou a mensagem
+
+    msg->msg_id = msg_id_counter;
+    incrementMsgIdCounter();
+
+    printMsg(msg);
+
+    addMsgToFeed(msg);
+
+    return true;
+}
+
+bool processFollowMessage(Message *msg) {
+    // Aqui você pode implementar o processamento da mensagem de FOLLOW
+    // Por exemplo, atualizar a lista de seguidores do usuário que enviou a mensagem ou enviar uma notificação para o usuário que está sendo seguido
+
+    
+
+    return true;
+}
+
+bool processReadMessage(Message *msg) {
+    // Aqui você pode implementar o processamento da mensagem de READ
+    // Por exemplo, recuperar as mensagens relevantes para o usuário que enviou a mensagem e enviar uma resposta de volta para o cliente com essas mensagens
+    
+    printMsg(msg);
+
+    int client_socket;
+
+    client_socket = getSocketByUsername(msg->username);
+
+    if (client_socket != ERROR) {
+        sendFeedToClient(client_socket);
+#ifdef DEBUG
+        printf("Feed enviado para o cliente %s\n", msg->username);
+#endif
+    }
+    else{
+        printf("Erro ao encontrar socket para o cliente %s\n", msg->username);
+    }
+
+    return true;
 }
 
 int main(int argc, char **argv) {

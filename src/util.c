@@ -22,3 +22,7 @@ void messageNetworkToHost(Message *msg) {
     // msg->attempts = ntohl(msg->attempts);
     // msg->win_status = ntohl(msg->win_status);
 }
+
+void printMsg(Message *msg) {
+    printf("Mensagem: Id: %d, Tipo: %d, Usuário: %s, Conteúdo: %s\n", msg->msg_id, msg->type, msg->username, msg->content);
+}
