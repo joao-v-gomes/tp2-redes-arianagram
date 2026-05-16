@@ -125,6 +125,11 @@ int validateInfoToConnectToServer(char *server_ip, int server_port, char *userna
 
 // Lê uma mensagem do servidor. Retorna OK se a leitura for bem-sucedida ou ERROR em caso de falha.
 int readMessageFromServer(int client_socket, Message *msg) {
+
+#ifdef DEBUG
+    printf("Lendo mensagem do servidor...\n");
+#endif
+
     int total = 0;
     memset(msg, 0, sizeof(Message));
 
@@ -209,6 +214,41 @@ void setUsername(char *new_username) {
     username[USER_SIZE - 1] = '\0'; // Garantir terminação nula
 }
 
+void *readFromServer(void *socket) {
+    int client_socket = *(int *)socket;
+    Message msg;
+
+#ifdef DEBUG
+    printf("Thread de leitura do servidor iniciada.\n");
+#endif
+
+    while (1) {
+        if (readMessageFromServer(client_socket, &msg) == ERROR) {
+#ifdef DEBUG
+            printf("Erro ao ler mensagem do servidor. Conexão pode ter sido encerrada.\n");
+#endif
+            break;
+        }
+
+        switch (msg.type) {
+            case MSG_PUSH:
+#ifdef DEBUG
+                printf("Recebida mensagem de PUSH do servidor:\n");
+#endif
+                printMsg(&msg);
+                break;
+            default:
+#ifdef DEBUG
+                printf("Recebida mensagem de tipo desconhecido do servidor:\n");
+#endif
+                printMsg(&msg);
+                break;
+        }
+    }
+
+    return NULL;
+}
+
 int main(int argc, char **argv) {
 
     argc_counter = argc;
@@ -236,6 +276,9 @@ int main(int argc, char **argv) {
                 }
                 else{
                     printf("Conectado ao servidor como %s.\n", username);
+                    pthread_t read_thread;
+                    pthread_create(&read_thread, NULL, readFromServer, &client_socket);
+                    pthread_detach(read_thread);
                     state = WAIT_USER_INPUT_STATE;
                     break;
                 }

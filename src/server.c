@@ -265,14 +265,10 @@ void* handleClientConnection(void *arg) {
     // Pega o mutex do arry global
     pthread_mutex_lock(&clients_mutex);
 
-    if (client_index < 0 || client_index >= MAX_CLIENTS){
-        if(!clients[client_index].active){
-            // Libera o acesso ao array global
-            // e retorna NULL
-            pthread_mutex_unlock(&clients_mutex);
-            return NULL;
-        }
-    } 
+    if (client_index < 0 || client_index >= MAX_CLIENTS || !clients[client_index].active) {
+        pthread_mutex_unlock(&clients_mutex);
+        return NULL;
+    }
 
     // Pega o socket do cliente para ler e escrever mensagens
     int client_fd = clients[client_index].client_fd;
@@ -295,6 +291,15 @@ void* handleClientConnection(void *arg) {
         case WAITING_FOR_MESSAGE:
             if (readMessageFromClient(client_fd, &msg_received) == OK) {
                 thread_state = RECEIVED_MSG;
+            } else {
+                pthread_mutex_lock(&clients_mutex);
+                if (client_index >= 0 && client_index < MAX_CLIENTS) {
+                    clients[client_index].active = 0;
+                }
+                pthread_mutex_unlock(&clients_mutex);
+
+                close(client_fd);
+                return NULL;
 
             }
             break;
@@ -358,7 +363,7 @@ void* handleClientConnection(void *arg) {
         
         case RECEIVED_MSG_READ:
             printf("Processando mensagem de READ do cliente %s\n", msg_received.username);
-            processReadMessage(&msg_received);
+            processReadMessage(&msg_received, client_fd);
             thread_state = WAITING_FOR_MESSAGE;
             break;
 
@@ -396,17 +401,37 @@ void addMsgToFeed(Message *msg) {
     pthread_mutex_unlock(&feed_mutex);
 }
 
+// Envia as mensagens do feed para o cliente.
+// Da mais novas para as mais antigas, ou seja, começa do início do array de mensagens do feed e vai até o final,
+// enviando as mensagens válidas (com msg_id != 0) para o cliente.
 void sendFeedToClient(int client_socket) {
+    Message feed_to_send[FEED_MAX_SIZE];
+
+    // Pega as mensagens do feed de forma sincronizada e recebe o contador
+    int feed_count = getFeedMessages(feed_to_send);
+
+    for (int i = 0; i < feed_count; i++) {
+        Message msg_to_send = feed_to_send[i];
+        // Enquanto FOLLOW/PUSH assíncrono não está implementado,
+        // enviamos o feed como MSG_PUSH para o cliente tratar no leitor assíncrono.
+        msg_to_send.type = MSG_PUSH;
+        messageHostToNetwork(&msg_to_send);
+        send(client_socket, &msg_to_send, sizeof(Message), 0);
+    }
+}
+
+int getFeedMessages(Message *feed) {
+    int feed_count = 0;
+
     pthread_mutex_lock(&feed_mutex);
     for (int i = 0; i < FEED_MAX_SIZE; i++) {
-        if (feed_messages[i].msg_id != 0) { // Verifica se a posição do feed está ocupada por uma mensagem válida
-            Message msg_to_send = feed_messages[i];
-            msg_to_send.type = MSG_PUSH; // Define o tipo da mensagem como PUSH para indicar que é uma notificação do feed
-            messageHostToNetwork(&msg_to_send);
-            send(client_socket, &msg_to_send, sizeof(Message), 0);
+        if (feed_messages[i].msg_id != 0) {
+            feed[feed_count++] = feed_messages[i];
         }
     }
     pthread_mutex_unlock(&feed_mutex);
+
+    return feed_count;
 }
 
 // Usa o username para pesquisar o socket do cliente e retorna o socket.
@@ -434,8 +459,8 @@ bool processPostMessage(Message *msg) {
     // Aqui você pode implementar o processamento da mensagem de POST
     // Por exemplo, armazenar a mensagem em uma estrutura de dados no servidor ou enviar notificações para os seguidores do usuário que postou a mensagem
 
-    msg->msg_id = msg_id_counter;
     incrementMsgIdCounter();
+    msg->msg_id = msg_id_counter;    
 
     printMsg(msg);
 
@@ -453,16 +478,11 @@ bool processFollowMessage(Message *msg) {
     return true;
 }
 
-bool processReadMessage(Message *msg) {
+bool processReadMessage(Message *msg, int client_socket) {
     // Aqui você pode implementar o processamento da mensagem de READ
     // Por exemplo, recuperar as mensagens relevantes para o usuário que enviou a mensagem e enviar uma resposta de volta para o cliente com essas mensagens
     
     printMsg(msg);
-
-    int client_socket;
-
-    client_socket = getSocketByUsername(msg->username);
-
     if (client_socket != ERROR) {
         sendFeedToClient(client_socket);
 #ifdef DEBUG

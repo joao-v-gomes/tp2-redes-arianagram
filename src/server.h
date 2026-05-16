@@ -37,10 +37,11 @@ int sendMessageToClient(int client_socket, Message *msg);
 
 bool processPostMessage(Message *msg);
 bool processFollowMessage(Message *msg);
-bool processReadMessage(Message *msg);
+bool processReadMessage(Message *msg, int client_socket);
 void sendFeedToClient(int client_socket);
 int getSocketByUsername(char *username);
 void addMsgToFeed(Message *msg);
 void incrementMsgIdCounter();
+int getFeedMessages(Message *feed);
 
 #endif // SERVER_H
