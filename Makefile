@@ -10,10 +10,10 @@ SRCDIR := src
 all: clean client server
 
 client:
-	$(CC) $(FLAGS) $(SRCDIR)/client.c -o client
+	$(CC) $(FLAGS) $(SRCDIR)/client.c $(SRCDIR)/util.c -o client
 
 server:
-	$(CC) $(FLAGS) $(SRCDIR)/server.c -o server
+	$(CC) $(FLAGS) $(SRCDIR)/server.c $(SRCDIR)/util.c -o server
 
 
 # all: clean main

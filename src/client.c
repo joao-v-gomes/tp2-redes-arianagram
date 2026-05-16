@@ -1,0 +1,425 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <ctype.h>
+#include "util.h"
+#include "client.h"
+
+#define DEBUG
+
+// Conta os argumentos para validar a quantidade de argumentos passados na linha de comando
+int argc_counter;
+
+// Variáveis globais para o estado da FSM e o socket do cliente
+int state;
+int client_socket;
+char user_input[256];
+
+// Estruturas para armazenar as mensagens enviadas e recebidas. Uma de cada vez...
+Message msg_sent;
+Message msg_received;
+
+// Se conecta ao servidor usando o IP e a porta fornecidos. Retorna o socket do cliente ou ERROR em caso de falha.
+// Testa a conexao IpV4 primeiro, se falhar tenta o IPv6. Se ambos falharem, retorna ERROR.
+int connectToServer(char *server_ip, int server_port, char *username) {
+    if(validateInfoToConnectToServer(server_ip, server_port, username) != 0) {
+        return ERROR;
+    }
+
+    int client_socket = ERROR;
+
+    struct sockaddr_in server_address_v4;
+    memset(&server_address_v4, 0, sizeof(server_address_v4));
+    server_address_v4.sin_family = AF_INET;
+    server_address_v4.sin_port = htons(server_port);
+
+    if (inet_pton(AF_INET, server_ip, &server_address_v4.sin_addr) == 1) {
+        client_socket = socket(AF_INET, SOCK_STREAM, 0);
+        if (client_socket < 0) {
+            return ERROR;
+        }
+
+        if (connect(client_socket, (struct sockaddr *)&server_address_v4, sizeof(server_address_v4)) < 0) {
+            close(client_socket);
+            return ERROR;
+        }
+
+        return client_socket;
+    }
+
+    struct sockaddr_in6 server_address_v6;
+    memset(&server_address_v6, 0, sizeof(server_address_v6));
+    server_address_v6.sin6_family = AF_INET6;
+    server_address_v6.sin6_port = htons(server_port);
+
+    if (inet_pton(AF_INET6, server_ip, &server_address_v6.sin6_addr) == 1) {
+        client_socket = socket(AF_INET6, SOCK_STREAM, 0);
+        if (client_socket < 0) {
+            return ERROR;
+        }
+
+        if (connect(client_socket, (struct sockaddr *)&server_address_v6, sizeof(server_address_v6)) < 0) {
+            close(client_socket);
+            return ERROR;
+        }
+#ifdef DEBUG
+        printf("Conectado ao servidor %s na porta %d usando IPv6.\n", server_ip, server_port);
+#endif  
+        return client_socket;
+    }
+
+    return ERROR;
+}
+
+// Valida as informações de configuração do cliente. Retorna OK se as informações forem válidas ou ERROR caso contrário.
+int validateInfoToConnectToServer(char *server_ip, int server_port, char *username) {
+
+    // Verificar se o número de argumentos é correto
+    if (argc_counter != 4) {
+#ifdef DEBUG
+        printf("Uso: ./client <endereço ip> <porta> <username>\n");
+#endif
+        return ERROR;
+    }
+
+    // Verificar se porta e valida
+    if (server_port <= 0 || server_port > 65535) {
+#ifdef DEBUG
+        printf("Porta inválida. Use um valor entre 1 e 65535.\n");
+#endif
+        return ERROR;
+    }
+
+    // Verificar se o IP do servidor é válido (IPv4 ou IPv6 literal)
+    struct in_addr sa_v4;
+    struct in6_addr sa_v6;
+
+    if (inet_pton(AF_INET, server_ip, &sa_v4) != 1 && inet_pton(AF_INET6, server_ip, &sa_v6) != 1) {
+#ifdef DEBUG
+        printf("Endereço IP inválido.\n");
+#endif
+        return ERROR;
+    }
+
+    // Verificar se o username é válido (não vazio e sem espaços)
+    if (strlen(username) == 0 || strchr(username, ' ') != NULL || strlen(username) >= USER_SIZE) {
+#ifdef DEBUG
+        printf("Username inválido.\n");
+#endif
+        return ERROR;
+    }
+
+#ifdef DEBUG
+    printf("Informações de configuração válidas. Tentando conectar ao servidor %s na porta %d com username '%s'.\n", server_ip, server_port, username);
+#endif
+    return OK;
+}
+
+// Lê uma mensagem do servidor. Retorna OK se a leitura for bem-sucedida ou ERROR em caso de falha.
+int readMessageFromServer(int client_socket, Message *msg) {
+    int total = 0;
+    memset(msg, 0, sizeof(Message));
+
+    while (total < sizeof(Message)) {
+        int n = recv(client_socket, ((char*)msg) + total, sizeof(Message) - total, 0);
+
+        // printf("Read %d bytes from server socket\n", n);
+
+        if (n <= 0){
+            return ERROR;
+        }
+        total += n;
+    }
+
+    messageNetworkToHost(msg);
+
+    return OK;
+}
+
+bool validateUserInput(char *input) {
+    // Aqui você pode implementar a validação da entrada do usuário
+    // Por exemplo, verificar se o comando é "post", "follow" ou "read" e se os argumentos estão corretos
+    // Retorna true se a entrada for válida ou false caso contrário
+
+    //verifica se a primeira palavra é um comando válido: POST, FOLLOW ou READ
+    char *command = strtok(input, " ");
+    if (command == NULL) {
+        return false;
+    }
+
+    if (strcmp(command, "POST") != 0 && strcmp(command, "FOLLOW") != 0 && strcmp(command, "READ") != 0) {
+        return false;
+    }
+
+    //Verfica se o comando é POST e se tem um conteúdo válido
+    if (strcmp(command, "POST") == 0) {
+        char *content = strtok(NULL, "");
+        if (content == NULL || strlen(content) == 0 || strlen(content) >= CONTENT_SIZE) {
+            return false;
+        }
+    }
+
+    //Verifica se o comando é FOLLOW e se tem um username válido
+    if (strcmp(command, "FOLLOW") == 0) {
+        char *target_username = strtok(NULL, " ");
+        if (target_username == NULL || strlen(target_username) == 0 || strlen(target_username) >= USER_SIZE) {
+            return false;
+        }
+    }
+
+    //Verifica se o comando é READ e se não tem argumentos extras
+    if (strcmp(command, "READ") == 0) {
+        char *extra = strtok(NULL, " ");
+        if (extra != NULL) {
+            return false;
+        }
+    }
+    
+#ifdef DEBUG
+    printf("Entrada do usuário válida: %s\n", input);
+#endif
+    return true;
+}
+
+int main(int argc, char **argv) {
+
+    argc_counter = argc;
+
+    // Inicializa o estado da FSM
+    state = START_CLIENT_STATE;
+
+    while(1)
+    {
+        switch (state)
+        {
+            case START_CLIENT_STATE:
+                state = CONNECT_TO_SERVER_STATE;
+                break;
+            
+            case CONNECT_TO_SERVER_STATE: {
+                char *server_ip = argv[1];
+                int server_port = atoi(argv[2]);
+                char *username = argv[3];
+
+                client_socket = connectToServer(server_ip, server_port, username);
+
+                if (client_socket < 0) {
+                    return ERROR;
+                }
+                else{
+                    printf("Conectado ao servidor como %s.\n", username);
+                    state = WAIT_USER_INPUT_STATE;
+                    break;
+                }
+            }
+
+            case WAIT_USER_INPUT_STATE: {
+
+                //Limpa o user_input para evitar lixo de memória
+                memset(user_input, 0, sizeof(user_input));
+
+                // Solicita a entrada do usuário
+                fgets(user_input, sizeof(user_input), stdin);
+
+                // Remove o caractere de nova linha, se presente
+                user_input[strcspn(user_input, "\n")] = 0;
+                if (strlen(user_input) == 0) {
+                    printf("Entrada vazia. Tente novamente.\n");
+                    state = WAIT_USER_INPUT_STATE;
+                    break;
+                }
+                else {
+                    state = VALIDATE_USER_INPUT_STATE;
+                    break;
+                }
+
+            }
+
+            case VALIDATE_USER_INPUT_STATE: {
+                // Aqui você pode implementar a validação da entrada do usuário
+                // Se a entrada for válida, defina o tipo da mensagem e o conteúdo apropriado
+                // Por exemplo, se o usuário digitar "post Hello World", você pode definir msg_sent.type = MSG_POST e msg_sent.content = "Hello World"
+                validateUserInput(user_input);
+
+                // Para fins de demonstração, vamos assumir que toda entrada é um post
+                msg_sent.type = MSG_POST;
+                strncpy(msg_sent.content, user_input, CONTENT_SIZE - 1);
+                msg_sent.content[CONTENT_SIZE - 1] = '\0'; // Garantir terminação nula
+
+                state = SEND_MSG_TO_SERVER_STATE;
+                break;
+            }
+
+            case SEND_MSG_TO_SERVER_STATE: {
+                if (send(client_socket, &msg_sent, sizeof(msg_sent), 0) < 0) {
+                    return ERROR;
+                }
+
+                state = WAIT_USER_INPUT_STATE;
+                break;
+            }
+
+            //     // Antes de enviar uma msg, limpa a estrutura para evitar enviar lixo de memória
+            //     memset(&msg_sent, 0, sizeof(msg_sent));
+
+            //     msg_sent.type = MSG_START;
+
+            //     messageHostToNetwork(&msg_sent);
+
+            //     send(client_socket, &msg_sent, sizeof(msg_sent), 0);
+
+            //     messageNetworkToHost(&msg_sent);
+
+            //     state = SEND_GUESS_STATE;
+            //     break;
+            // }
+
+            // case SEND_GUESS_STATE: {
+            //     printf("Insira seu palpite:\n");
+
+            //     // 5 dígitos + '\n' + '\0' = 7 caracteres
+            //     char guess_string[7];
+
+            //     // Limpa a string do palpite para evitar lixo de memória
+            //     memset(guess_string, 0, sizeof(guess_string));
+
+            //     // Comecei usando scanf, mas o fgets foi melhor
+            //     if (fgets(guess_string, sizeof(guess_string), stdin) == NULL) {
+            //         return ERROR;
+            //     }
+
+            //     // Se nao houver '\n', a entrada ultrapassou o buffer.
+            //     // Descarta o restante para nao poluir a proxima leitura.
+            //     if (strchr(guess_string, '\n') == NULL) {
+            //         int ch;
+            //         while ((ch = getchar()) != '\n' && ch != EOF) {
+            //         }
+            //     }
+
+            //     // Check na validade do palpite
+            //     if (!isValidGuess(guess_string)) {
+            //         printf("Insira uma sequência válida!\n");
+            //         state = SEND_GUESS_STATE;
+            //         break;
+            //     }
+
+            //     memset(&msg_sent, 0, sizeof(msg_sent));
+
+            //     // Seta o tipo da msg
+            //     msg_sent.type = MSG_GUESS;
+
+            //     // Converte para um array de int
+            //     for(int i = 0; i < 5; i++) {
+            //         msg_sent.guess[i] = guess_string[i] - '0';
+            //     }
+
+            //     messageHostToNetwork(&msg_sent);
+
+            //     send(client_socket, &msg_sent, sizeof(msg_sent), 0);
+
+            //     messageNetworkToHost(&msg_sent);
+                
+            //     // Aguarda o feedback do servidor
+            //     state = WAIT_FOR_FEEDBACK_STATE;
+
+            //     break;
+            // }
+
+            // case WAIT_FOR_FEEDBACK_STATE:
+
+            //     // le a msg recebida em msg_received
+            //     if(readMessageFromServer(client_socket, &msg_received) == ERROR) {
+            //         return ERROR;
+            //     }
+
+            //     // Classifica a msg recebida de acordo com o tipo do protocolo.
+            //     switch (msg_received.type)
+            //     {
+            //         case MSG_FEEDBACK:
+            //             if (msg_received.win_status == IN_GAME) {
+            //                 state = RECEIVED_IN_GAME_FEEDBACK_STATE;
+            //             }
+            //             else {
+            //                 return ERROR;
+            //             }
+            //             break;
+
+            //         case MSG_WIN:
+            //             state = RECEIVED_WIN_FEEDBACK_STATE;
+            //             break;
+
+            //         case MSG_ERROR:
+            //             state = RECEIVED_ERROR_FEEDBACK_STATE;
+            //             break;
+
+            //         default:
+            //             return ERROR;
+            //             break;
+            //     }
+            //     break;
+
+            // case RECEIVED_IN_GAME_FEEDBACK_STATE: {
+            //     if (strlen(msg_received.message) == 0) {
+            //         return ERROR;
+            //     }
+
+            //     printf("%s\n", msg_received.message);
+
+            //     // Volta para o estado de enviar palpite
+            //     state = SEND_GUESS_STATE;
+            //     break;
+            // }
+
+            // case RECEIVED_WIN_FEEDBACK_STATE: {
+            //     if (strlen(msg_received.message) == 0) {
+            //         return ERROR;
+            //     }
+
+            //     printf("%s\n", msg_received.message);
+
+            //     // Envia a mensagem de saída para o servidor
+            //     memset(&msg_sent, 0, sizeof(msg_sent));
+            //     msg_sent.type = MSG_EXIT;
+
+            //     messageHostToNetwork(&msg_sent);
+                
+            //     send(client_socket, &msg_sent, sizeof(msg_sent), 0);
+
+            //     messageNetworkToHost(&msg_sent);
+
+            //     // Fecha o socket do cliente
+            //     close(client_socket);
+
+            //     state = WIN_STATE;
+                
+            //     break;
+            // }
+
+            // // Caso o palpite seja inválido, 
+            // // o servidor retorna um feedback com win_status = ERROR. Nesse caso, o cliente deve informar o usuário e pedir um novo palpite.
+            // case RECEIVED_ERROR_FEEDBACK_STATE:
+            //     if (strlen(msg_received.message) == 0) {
+            //         return ERROR;
+            //     }
+
+            //     printf("%s\n", msg_received.message);
+            //     state = SEND_GUESS_STATE;
+            //     break;
+            
+            // case WIN_STATE:
+            //     state = EXIT_STATE;
+
+            //     break;
+
+            case EXIT_STATE:
+                exit(0);
+                break;
+
+            default:
+                break;
+        }
+    }
+}
