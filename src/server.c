@@ -39,7 +39,10 @@ Message feed_messages[FEED_MAX_SIZE];
 //Mutex para proteger o acesso ao array de mensagens do feed
 pthread_mutex_t feed_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-
+// Matriz de followers
+// Cada linha representa um usuário e as colunas representam os seguidores desse usuário.
+// Por exemplo, followers[0][1] = 1 significa que o usuário 0 é seguido pelo usuário 1.
+int followers[MAX_CLIENTS][MAX_CLIENTS] = {0};
 
 
 // Configura o server para Ipv4
@@ -426,7 +429,8 @@ int getFeedMessages(Message *feed) {
     pthread_mutex_lock(&feed_mutex);
     for (int i = 0; i < FEED_MAX_SIZE; i++) {
         if (feed_messages[i].msg_id != 0) {
-            feed[feed_count++] = feed_messages[i];
+            feed[feed_count] = feed_messages[i];
+            feed_count++;
         }
     }
     pthread_mutex_unlock(&feed_mutex);
