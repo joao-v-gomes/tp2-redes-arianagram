@@ -8,7 +8,6 @@
 #include <sys/socket.h>
 #include "util.h"
 #include "server.h"
-#include "ifaddrs.h"
 
 // Usado para exibir as msgs de debug
 // #define DEBUG
@@ -18,7 +17,6 @@ int state;
 
 int server_socket = 0;
 int argc_counter;
-int code = 0;
 
 // Contador para IDs de mensagens
 uint32_t msg_id_counter = 0;
@@ -203,8 +201,6 @@ int waitForClientConnection(int server_socket) {
     clients[client_index].client_fd = client_socket;
     memset(clients[client_index].username, 0, USER_SIZE);
     pthread_mutex_init(&clients[client_index].send_mutex, NULL);
-    pthread_mutex_init(&clients[client_index].queue_mutex, NULL);
-    pthread_cond_init(&clients[client_index].queue_cond, NULL);
     pthread_mutex_unlock(&clients_mutex);
 
     // Criar thread passando o índice do cliente no array.
@@ -243,18 +239,6 @@ int readMessageFromClient(int client_socket, Message *msg) {
     return OK;
 }
 
-// Envia uma mensagem para o cliente
-int sendMessageToClient(int client_socket, Message *msg) {
-    messageHostToNetwork(msg);
-    int n = send(client_socket, msg, sizeof(Message), 0);
-    if (n <= 0) {
-        return ERROR;
-    }
-    else{
-        return OK;
-    }
-}
-
 // Função executada em thread para lidar com cada cliente conectado
 void* handleClientConnection(void *arg) {
 
@@ -283,8 +267,8 @@ void* handleClientConnection(void *arg) {
     // Libera o acesso ao array global
     pthread_mutex_unlock(&clients_mutex);
 
-    Message msg_received, msg_to_send;
-    
+    Message msg_received;
+
     // Loop principal para processar mensagens do cliente
     while (1) {
 
@@ -427,11 +411,6 @@ void* handleClientConnection(void *arg) {
             thread_state = WAITING_FOR_MESSAGE;
             break;
 
-        case SEND_MSG_TO_CLIENT:
-            sendMessageToClient(client_fd, &msg_to_send);
-            thread_state = WAITING_FOR_MESSAGE;
-            break;
-
         default:
             break;
         }
@@ -495,27 +474,6 @@ int getFeedMessages(Message *feed) {
     pthread_mutex_unlock(&feed_mutex);
 
     return feed_count;
-}
-
-// Usa o username para pesquisar o socket do cliente e retorna o socket.
-int getSocketByUsername(char *username) {
-#ifdef DEBUG
-    printf("Procurando socket para o cliente %s\n", username);
-#endif
-
-    pthread_mutex_lock(&clients_mutex);
-    for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (clients[i].active && strcmp(clients[i].username, username) == 0) {
-            int socket = clients[i].client_fd;
-            pthread_mutex_unlock(&clients_mutex);
-#ifdef DEBUG
-            printf("Socket encontrado! \n");
-#endif
-            return socket;
-        }
-    }
-    pthread_mutex_unlock(&clients_mutex);
-    return ERROR; // Retorna ERROR se o cliente não for encontrado
 }
 
 bool processPostMessage(Message *msg) {
@@ -662,142 +620,6 @@ int main(int argc, char **argv) {
 
                 break;
             }
-            // case WAIT_FOR_START_MESSAGE_STATE:
-            //     memset(&msg_received, 0, sizeof(msg_received));
-
-            //     if (readMessageFromClient(client_socket, &msg_received) == ERROR) {
-            //         return ERROR;
-            //     }
-
-            //     if(msg_received.type == MSG_START) {
-            //         state = RECEIVED_START_MESSAGE_STATE;
-            //     }
-            //     else{
-            //         return ERROR;
-            //     }
-
-            //     break;
-
-            // case RECEIVED_START_MESSAGE_STATE:
-            //     state = WAITING_FOR_MESSAGE_STATE;
-            //     attempts_counter = 1;
-
-            //     // Ao receber a msg de START, limpa as msg para uiniciar do zero.
-            //     // Seta o attempts_counter para 1.
-            //     memset(&msg_received, 0, sizeof(msg_received));
-            //     memset(&msg_to_send, 0, sizeof(msg_to_send));
-
-            //     break;    
-
-            // case WAITING_FOR_MESSAGE_STATE:
-
-            //     // Aguarda o palpite do cliente.
-            //     memset(&msg_received, 0, sizeof(msg_received));
-
-            //     if (readMessageFromClient(client_socket, &msg_received) == ERROR) {
-            //         return ERROR;
-            //     }
-            //     else if (msg_received.type == MSG_GUESS) {
-            //         state = RECEIVED_GUESS_MESSAGE_STATE;
-            //     }
-            //     else{
-            //         return ERROR;
-            //     }
-
-            //     break;
-            
-            // case RECEIVED_GUESS_MESSAGE_STATE: {
-            //     state = SEND_FEEDBACK_STATE;
-
-            //     break;
-            // }
-
-            // case SEND_FEEDBACK_STATE:
-            //     memset(&msg_to_send, 0, sizeof(msg_to_send));
-
-            //     if (!isValidGuess(msg_received.guess)) {
-            //         msg_to_send.type = MSG_ERROR;
-            //         msg_to_send.win_status = ERROR;
-            //         msg_to_send.attempts = attempts_counter;
-            //         setMessage(&msg_to_send, "Insira uma sequência válida!");
-
-            //         messageHostToNetwork(&msg_to_send);
-
-            //         send(client_socket, &msg_to_send, sizeof(msg_to_send), 0);
-
-            //         messageNetworkToHost(&msg_to_send);
-
-            //         state = WAITING_FOR_MESSAGE_STATE;
-            //         break;
-            //     }
-
-            //     fillFeedbackWithGuess(msg_received.guess, &msg_to_send);
-
-            //     calculateFeedback(msg_received.guess, code, &msg_to_send);
-
-            //     // Incrementa as tentativas se elas forem validas
-            //     msg_to_send.attempts = attempts_counter++;
-
-            //     if (msg_to_send.win_status == IN_GAME) {
-            //         msg_to_send.type = MSG_FEEDBACK;
-            //         char feedback[6];
-            //         buildFeedbackString(&msg_to_send, feedback);
-            //         snprintf(msg_to_send.message, MSG_SIZE,
-            //                  "Dica: %s\nTentativas realizadas: %d",
-            //                  feedback,
-            //                  msg_to_send.attempts);
-            //     }
-            //     else if (msg_to_send.win_status == WIN) {
-            //         msg_to_send.type = MSG_WIN;
-            //         setMessage(&msg_to_send, "Acesso concedido! Thaísa recuperou o sistema!");
-            //     }
-            //     else {
-            //         return ERROR;
-            //     }
-
-            //     messageHostToNetwork(&msg_to_send);
-
-            //     send(client_socket, &msg_to_send, sizeof(msg_to_send), 0);
-
-            //     messageNetworkToHost(&msg_to_send);
-
-            //     // Verifica o feedback para decidir o próximo estado. 
-            //     // Se o cliente ganhou, espera a mensagem de exit. 
-            //     //Caso contrário, espera um novo palpite.
-            //     if(msg_to_send.win_status == IN_GAME) {
-            //         state = WAITING_FOR_MESSAGE_STATE;
-            //     }
-            //     else if (msg_to_send.win_status == WIN) {
-            //         state = WAIT_FOR_EXIT_MESSAGE_STATE;
-            //     }
-            //     else{
-            //         return ERROR;
-            //     }
-
-            //     break;
-
-            // case WAIT_FOR_EXIT_MESSAGE_STATE:
-            //     memset(&msg_received, 0, sizeof(msg_received));
-            //     if(readMessageFromClient(client_socket, &msg_received) == ERROR) {
-            //         return ERROR;
-            //     }
-
-            //     if (msg_received.type == MSG_EXIT) {
-            //         state = EXIT_STATE;
-            //         memset(&msg_to_send, 0, sizeof(msg_to_send));
-            //         setMessage(&msg_to_send, "Cliente desconectado");
-            //         printf("%s\n", msg_to_send.message);
-
-            //         // Fecha os sockets do cliente e do servidor antes de sair.
-            //         close(client_socket);
-            //         close(server_socket);
-
-            //     }
-            //     else{
-            //         return ERROR;
-            //     }
-
-            //     break;
 
             case EXIT_STATE:
                 exit(0);

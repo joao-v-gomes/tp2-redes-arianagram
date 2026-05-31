@@ -35,15 +35,7 @@ typedef struct {
     uint32_t msg_id ;               /* ID sequencial ( preenchido pelo servidor ) */
 } Message;
 
-// // Estrutura para representar uma mensagem na fila de mensagens
-// // importante pra poder iterar sobre a fila e liberar a memória alocada para cada mensagem depois de processada e pra organizar as msg que chegarem
-// typedef struct msg_node {
-//     Message msg;
-//     struct msg_node *next;
-// } msg_node_t;
-
-// Estrutura para armazenar as informações de um cliente conectado
-// cada cliente tem uma fila de mensagens para receber do servidor, protegida por um mutex e uma variável de condição para sincronização.
+// Estrutura para armazenar as informações de um cliente conectado.
 typedef struct {
     int active;
 
@@ -54,9 +46,6 @@ typedef struct {
 
     // Protege escritas no socket deste cliente (thread do poster + thread própria podem escrever concorrentemente)
     pthread_mutex_t send_mutex;
-
-    pthread_mutex_t queue_mutex;
-    pthread_cond_t queue_cond;
 
 } client_t;
 
