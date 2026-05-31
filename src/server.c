@@ -221,9 +221,6 @@ int waitForClientConnection(int server_socket) {
     clients[client_index].id = id;
     pthread_mutex_unlock(&clients_mutex);
 
-#ifdef DEBUG
-    printf("Cliente conectado (índice %d)\n", client_index);
-#endif
     return client_index;
 }
 
@@ -302,15 +299,25 @@ void* handleClientConnection(void *arg) {
             if (readMessageFromClient(client_fd, &msg_received) == OK) {
                 thread_state = RECEIVED_MSG;
             } else {
+                // Captura o username antes de marcar o slot como inativo.
+                char disc_username[USER_SIZE];
+                memset(disc_username, 0, sizeof(disc_username));
+
                 pthread_mutex_lock(&clients_mutex);
                 if (client_index >= 0 && client_index < MAX_CLIENTS) {
+                    strncpy(disc_username, clients[client_index].username, USER_SIZE - 1);
+                    disc_username[USER_SIZE - 1] = '\0';
                     clients[client_index].active = 0;
                 }
                 pthread_mutex_unlock(&clients_mutex);
 
+                // Só loga [DISC] se o cliente chegou a registrar um username.
+                if (disc_username[0] != '\0') {
+                    printf("[DISC] %s desconectou.\n", disc_username);
+                }
+
                 close(client_fd);
                 return NULL;
-
             }
             break;
 
@@ -331,7 +338,9 @@ void* handleClientConnection(void *arg) {
             pthread_mutex_unlock(&clients_mutex);
 
             if (!username_registered && msg_received.type != MSG_CONNECT) {
-                printf("Cliente %d enviou mensagem sem registrar username (MSG_CONNECT). Encerrando conexão.\n", (int)client_index);
+#ifdef DEBUG
+                printf("Cliente %d enviou mensagem sem registrar username. Encerrando conexão.\n", (int)client_index);
+#endif
                 pthread_mutex_lock(&clients_mutex);
                 if (client_index >= 0 && client_index < MAX_CLIENTS) {
                     clients[client_index].active = 0;
@@ -348,27 +357,25 @@ void* handleClientConnection(void *arg) {
 
             switch (msg_received.type) {
             case MSG_CONNECT:
-                printf("Recebida mensagem de CONNECT do cliente (slot %d): %s\n", (int)client_index, msg_received.username);
                 thread_state = RECEIVED_MSG_CONNECT;
                 break;
 
             case MSG_POST:
-                printf("Recebida mensagem de POST do cliente %s: %s\n", msg_received.username, msg_received.content);
                 thread_state = RECEIVED_MSG_POST;
                 break;
-            
+
             case MSG_FOLLOW:
-                printf("Recebida mensagem de FOLLOW do cliente %s: %s\n", msg_received.username, msg_received.content);
                 thread_state = RECEIVED_MSG_FOLLOW;
                 break;
 
             case MSG_READ:
-                printf("Recebida mensagem de READ do cliente %s\n", msg_received.username);
                 thread_state = RECEIVED_MSG_READ;
                 break;
 
             default:
+#ifdef DEBUG
                 printf("Recebida mensagem de tipo desconhecido do cliente %s\n", msg_received.username);
+#endif
                 break;
             }
 
@@ -378,7 +385,9 @@ void* handleClientConnection(void *arg) {
         case RECEIVED_MSG_CONNECT:
             msg_received.username[USER_SIZE - 1] = '\0';
             if (msg_received.username[0] == '\0') {
+#ifdef DEBUG
                 printf("MSG_CONNECT inválida: username vazio (slot %d). Encerrando conexão.\n", (int)client_index);
+#endif
                 pthread_mutex_lock(&clients_mutex);
                 if (client_index >= 0 && client_index < MAX_CLIENTS) {
                     clients[client_index].active = 0;
@@ -399,36 +408,27 @@ void* handleClientConnection(void *arg) {
             }
             pthread_mutex_unlock(&clients_mutex);
 
-            printf("Cliente registrado no slot %d como '%s'\n", (int)client_index, msg_received.username);
+            printf("[CONN] %s conectou.\n", msg_received.username);
             thread_state = WAITING_FOR_MESSAGE;
             break;
 
         case RECEIVED_MSG_POST:
-            printf("Processando mensagem de POST do cliente %s: %s\n", msg_received.username, msg_received.content);
             processPostMessage(&msg_received);
             thread_state = WAITING_FOR_MESSAGE;
             break;
-        
+
         case RECEIVED_MSG_FOLLOW:
-            printf("Processando mensagem de FOLLOW do cliente %s: %s\n", msg_received.username, msg_received.content);
             processFollowMessage(&msg_received);
             thread_state = WAITING_FOR_MESSAGE;
             break;
-        
+
         case RECEIVED_MSG_READ:
-            printf("Processando mensagem de READ do cliente %s\n", msg_received.username);
             processReadMessage(&msg_received, (int)client_index);
             thread_state = WAITING_FOR_MESSAGE;
             break;
 
         case SEND_MSG_TO_CLIENT:
-            printf("Enviando mensagem de resposta para o cliente %s\n", msg_received.username);
-            if (sendMessageToClient(client_fd, &msg_to_send) == OK) {
-                printf("Mensagem enviada para o cliente %s: %s\n", msg_received.username, msg_to_send.content);
-            }
-            else{
-                printf("Erro ao enviar mensagem para o cliente %s\n", msg_received.username);
-            }
+            sendMessageToClient(client_fd, &msg_to_send);
             thread_state = WAITING_FOR_MESSAGE;
             break;
 
@@ -522,6 +522,8 @@ bool processPostMessage(Message *msg) {
     msg->msg_id = incrementMsgIdCounter();
 
     addMsgToFeed(msg);
+
+    printf("[LOG] %s posted (ID %u): \"%s\"\n", msg->username, msg->msg_id, msg->content);
 
     // Passo 1: coletar os nomes dos seguidores do poster sem segurar o lock por muito tempo.
     char to_notify[MAX_CLIENTS][USER_SIZE];
@@ -637,7 +639,7 @@ int main(int argc, char **argv) {
                     return ERROR;
                 }
                 else{
-                    printf("Aguardando conexões na porta %d\n", port);
+                    printf("Aguardando conexoes na porta %d.\n", port);
                     state = WAIT_FOR_CONNECTION_STATE;
                 }
 
@@ -646,14 +648,17 @@ int main(int argc, char **argv) {
 
             case WAIT_FOR_CONNECTION_STATE: {
                 int client_index = waitForClientConnection(server_socket);
-                
+
                 if (client_index < 0) {
+#ifdef DEBUG
                     printf("Erro ao aceitar conexão do cliente\n");
+#endif
                 }
-                else{
+#ifdef DEBUG
+                else {
                     printf("Cliente conectado (índice %d)\n", client_index);
-                    // A thread está rodando agora, voltamos a esperar por mais conexões
                 }
+#endif
 
                 break;
             }

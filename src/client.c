@@ -20,6 +20,11 @@ int client_socket;
 char user_input[256];
 char username[USER_SIZE];
 
+// Flag compartilhada entre a thread principal e a leitora:
+// 1 enquanto o cliente aguarda a resposta de um MSG_READ (itens do feed),
+// 0 fora desse contexto (notificações ao vivo).
+volatile int in_feed = 0;
+
 // Estruturas para armazenar as mensagens enviadas e recebidas. Uma de cada vez...
 Message msg_sent;
 Message msg_to_send;
@@ -255,10 +260,15 @@ void *readFromServer(void *socket) {
 
         switch (msg.type) {
             case MSG_PUSH:
-                printf("[%s] %s\n", msg.username, msg.content);
+                if (in_feed) {
+                    printf("[FEED] ID %u | %s: \"%s\"\n", msg.msg_id, msg.username, msg.content);
+                } else {
+                    printf("[NOTIFICATION] %s: \"%s\"\n", msg.username, msg.content);
+                }
                 break;
             case MSG_END:
-                printf("Fim do feed.\n");
+                // Fim silencioso do feed: reseta o flag.
+                in_feed = 0;
                 break;
             default:
 #ifdef DEBUG
@@ -375,6 +385,11 @@ int main(int argc, char **argv) {
 #ifdef DEBUG
                 printMsg(&msg_to_send);
 #endif
+                // Ativa o flag antes de enviar para que a thread leitora já esteja
+                // pronta para imprimir [FEED] quando os MSG_PUSH chegarem.
+                if (msg_to_send.type == MSG_READ) {
+                    in_feed = 1;
+                }
 
                 if (sendMessageToServer(client_socket, &msg_to_send) == ERROR) {
                     return ERROR;
