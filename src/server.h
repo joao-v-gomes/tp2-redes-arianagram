@@ -4,7 +4,7 @@
 #include "util.h"
 #include <netinet/in.h>
 
-#define MAX_CLIENTS 5
+#define MAX_CLIENTS 128
 #define FEED_MAX_SIZE 5
 
 // Estados da FSM do servidor

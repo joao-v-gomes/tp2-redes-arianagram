@@ -1,5 +1,5 @@
 CC := gcc
-FLAGS := -I include/ -Wall 
+FLAGS := -I include/ -Wall -pthread 
 # LFLAGS := -lpqxx -lpq
 BUILDDIR := build
 SRCDIR := src

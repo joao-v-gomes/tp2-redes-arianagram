@@ -130,7 +130,7 @@ int setUpServer(char *ip, int port) {
         return ERROR;
     }
 
-    if (listen(server_socket, 1) < 0) {
+    if (listen(server_socket, MAX_CLIENTS) < 0) {
         printf("Error listening for connections");
         return ERROR;
     }
@@ -258,6 +258,10 @@ int sendMessageToClient(int client_socket, Message *msg) {
 
 // Função executada em thread para lidar com cada cliente conectado
 void* handleClientConnection(void *arg) {
+
+    // Detach da própria thread: ela libera seus recursos sozinha ao terminar,
+    // sem precisar de pthread_join. No topo para cobrir todos os pontos de saída.
+    pthread_detach(pthread_self());
 
     int thread_state = START;
 
