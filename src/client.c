@@ -343,7 +343,9 @@ int main(int argc, char **argv) {
 
                 // Solicita a entrada do usuário
                 if (fgets(user_input, sizeof(user_input), stdin) == NULL) {
+#ifdef DEBUG
                     printf("Entrada encerrada. Desconectando cliente.\n");
+#endif
                     close(client_socket);
                     return ERROR;
                 }
@@ -351,7 +353,9 @@ int main(int argc, char **argv) {
                 // Remove o caractere de nova linha, se presente
                 user_input[strcspn(user_input, "\n")] = 0;
                 if (strlen(user_input) == 0) {
+#ifdef DEBUG
                     printf("Entrada vazia. Tente novamente.\n");
+#endif
                     state = WAIT_USER_INPUT_STATE;
                     break;
                 }
@@ -370,7 +374,9 @@ int main(int argc, char **argv) {
                 // validateUserInput define msg_to_send.type e já preenche msg_to_send.content
                 // com só o conteúdo do POST / só o alvo do FOLLOW (sem o nome do comando).
                 if (!validateUserInput(user_input)) {
+#ifdef DEBUG
                     printf("Entrada inválida. Tente novamente.\n");
+#endif
                     state = WAIT_USER_INPUT_STATE;
                     break;
                 }
