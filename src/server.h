@@ -27,6 +27,7 @@
 #define RECEIVED_MSG_FOLLOW 4
 #define RECEIVED_MSG_READ 5
 #define SEND_MSG_TO_CLIENT 6
+#define RECEIVED_MSG_CONNECT 7
 
 // Forward declaration da função que roda em thread para cada cliente
 void* handleClientConnection(void *arg);
@@ -43,5 +44,6 @@ int getSocketByUsername(char *username);
 void addMsgToFeed(Message *msg);
 void incrementMsgIdCounter();
 int getFeedMessages(Message *feed);
+void sendEndMessageToClient(int client_socket);
 
 #endif // SERVER_H

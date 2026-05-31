@@ -9,7 +9,7 @@
 #include "util.h"
 #include "client.h"
 
-#define DEBUG
+// #define DEBUG
 
 // Conta os argumentos para validar a quantidade de argumentos passados na linha de comando
 int argc_counter;
@@ -149,6 +149,22 @@ int readMessageFromServer(int client_socket, Message *msg) {
     return OK;
 }
 
+int sendMessageToServer(int client_socket, Message *msg) {
+    Message msg_to_send = *msg;
+    messageHostToNetwork(&msg_to_send);
+
+    int total = 0;
+    while (total < sizeof(Message)) {
+        int n = send(client_socket, ((char *)&msg_to_send) + total, sizeof(Message) - total, 0);
+        if (n <= 0) {
+            return ERROR;
+        }
+        total += n;
+    }
+
+    return OK;
+}
+
 
 bool validateUserInput(char *input) {
     // Aqui você pode implementar a validação da entrada do usuário
@@ -175,6 +191,10 @@ bool validateUserInput(char *input) {
             free(input_temp);
             return false;
         }
+        // Guarda só o conteúdo (sem o "POST ") no campo content.
+        // Copia antes do free(input_temp), pois content aponta para dentro dele.
+        strncpy(msg_to_send.content, content, CONTENT_SIZE - 1);
+        msg_to_send.content[CONTENT_SIZE - 1] = '\0';
         msg_to_send.type = MSG_POST;
     }
 
@@ -185,6 +205,9 @@ bool validateUserInput(char *input) {
             free(input_temp);
             return false;
         }
+        // Guarda só o alvo do follow (ex: "@ariana") no campo content.
+        strncpy(msg_to_send.content, target_username, USER_SIZE - 1);
+        msg_to_send.content[USER_SIZE - 1] = '\0';
         msg_to_send.type = MSG_FOLLOW;
     }
 
@@ -232,16 +255,16 @@ void *readFromServer(void *socket) {
 
         switch (msg.type) {
             case MSG_PUSH:
-#ifdef DEBUG
-                printf("Recebida mensagem de PUSH do servidor:\n");
-#endif
-                printMsg(&msg);
+                printf("[%s] %s\n", msg.username, msg.content);
+                break;
+            case MSG_END:
+                printf("Fim do feed.\n");
                 break;
             default:
 #ifdef DEBUG
                 printf("Recebida mensagem de tipo desconhecido do servidor:\n");
-#endif
                 printMsg(&msg);
+#endif
                 break;
         }
     }
@@ -279,18 +302,41 @@ int main(int argc, char **argv) {
                     pthread_t read_thread;
                     pthread_create(&read_thread, NULL, readFromServer, &client_socket);
                     pthread_detach(read_thread);
-                    state = WAIT_USER_INPUT_STATE;
+                    state = SEND_CONNECT_MESSAGE_STATE;
                     break;
                 }
             }
 
+            //Envia o MSG_CONNECT para o servidor,
+            // para que ele possa registrar o username do cliente e associar ao socket.
+            case SEND_CONNECT_MESSAGE_STATE: {
+                
+                Message connect_msg;
+                memset(&connect_msg, 0, sizeof(connect_msg));
+
+                connect_msg.type = MSG_CONNECT;
+                strncpy(connect_msg.username, getUsername(), USER_SIZE - 1);
+                connect_msg.username[USER_SIZE - 1] = '\0'; // Garantir terminação nula
+
+                if (sendMessageToServer(client_socket, &connect_msg) == ERROR) {
+                    return ERROR;
+                }
+
+                state = WAIT_USER_INPUT_STATE;
+                break;
+            }
+            
             case WAIT_USER_INPUT_STATE: {
 
                 //Limpa o user_input para evitar lixo de memória
                 memset(user_input, 0, sizeof(user_input));
 
                 // Solicita a entrada do usuário
-                fgets(user_input, sizeof(user_input), stdin);
+                if (fgets(user_input, sizeof(user_input), stdin) == NULL) {
+                    printf("Entrada encerrada. Desconectando cliente.\n");
+                    close(client_socket);
+                    return ERROR;
+                }
 
                 // Remove o caractere de nova linha, se presente
                 user_input[strcspn(user_input, "\n")] = 0;
@@ -307,9 +353,12 @@ int main(int argc, char **argv) {
             }
 
             case VALIDATE_USER_INPUT_STATE: {
-                // Aqui você pode implementar a validação da entrada do usuário
-                // Se a entrada for válida, defina o tipo da mensagem e o conteúdo apropriado
-                // Por exemplo, se o usuário digitar "post Hello World", você pode definir msg_sent.type = MSG_POST e msg_sent.content = "Hello World"
+                // Limpa a mensagem antes de montá-la para não sobrar lixo de um comando
+                // anterior (ex: content de um POST antigo aparecendo num READ).
+                memset(&msg_to_send, 0, sizeof(msg_to_send));
+
+                // validateUserInput define msg_to_send.type e já preenche msg_to_send.content
+                // com só o conteúdo do POST / só o alvo do FOLLOW (sem o nome do comando).
                 if (!validateUserInput(user_input)) {
                     printf("Entrada inválida. Tente novamente.\n");
                     state = WAIT_USER_INPUT_STATE;
@@ -317,18 +366,17 @@ int main(int argc, char **argv) {
                 }
                 else {
                     strcpy(msg_to_send.username, getUsername());
-                    strncpy(msg_to_send.content, user_input, CONTENT_SIZE - 1);
-                    msg_to_send.content[CONTENT_SIZE - 1] = '\0'; // Garantir terminação nula
-
                     state = SEND_MSG_TO_SERVER_STATE;
                     break;
                 }
             }
 
             case SEND_MSG_TO_SERVER_STATE: {
+#ifdef DEBUG
                 printMsg(&msg_to_send);
+#endif
 
-                if (send(client_socket, &msg_to_send, sizeof(msg_to_send), 0) < 0) {
+                if (sendMessageToServer(client_socket, &msg_to_send) == ERROR) {
                     return ERROR;
                 }
 

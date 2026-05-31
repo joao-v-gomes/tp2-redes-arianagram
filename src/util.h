@@ -19,10 +19,12 @@
 
 // Tipos de mensagens entre cliente e servidor
 typedef enum {
-    MSG_POST = 1,   /* Cliente -> Servidor : enviar novo post */
-    MSG_FOLLOW = 2, /* Cliente -> Servidor : seguir outro usuario */
-    MSG_READ = 3,   /* Cliente -> Servidor : solicitar feed global */
-    MSG_PUSH = 4     /* Servidor -> Cliente : notificacao de seguido */
+    MSG_CONNECT = 0,    /* Cliente -> Servidor : conectar-se ao servidor */
+    MSG_POST = 1,       /* Cliente -> Servidor : enviar novo post */
+    MSG_FOLLOW = 2,     /* Cliente -> Servidor : seguir outro usuario */
+    MSG_READ = 3,       /* Cliente -> Servidor : solicitar feed global */
+    MSG_PUSH = 4,        /* Servidor -> Cliente : notificacao de seguido */
+    MSG_END = 5         /* Servidor -> Cliente: fim do feed */
 } MessageType;
 
 // Estrutura da mensagem entre cliente e servidor
@@ -33,12 +35,12 @@ typedef struct {
     uint32_t msg_id ;               /* ID sequencial ( preenchido pelo servidor ) */
 } Message;
 
-// Estrutura para representar uma mensagem na fila de mensagens
-// importante pra poder iterar sobre a fila e liberar a memória alocada para cada mensagem depois de processada e pra organizar as msg que chegarem
-typedef struct msg_node {
-    Message msg;
-    struct msg_node *next;
-} msg_node_t;
+// // Estrutura para representar uma mensagem na fila de mensagens
+// // importante pra poder iterar sobre a fila e liberar a memória alocada para cada mensagem depois de processada e pra organizar as msg que chegarem
+// typedef struct msg_node {
+//     Message msg;
+//     struct msg_node *next;
+// } msg_node_t;
 
 // Estrutura para armazenar as informações de um cliente conectado
 // cada cliente tem uma fila de mensagens para receber do servidor, protegida por um mutex e uma variável de condição para sincronização.
@@ -53,8 +55,8 @@ typedef struct {
     pthread_mutex_t queue_mutex;
     pthread_cond_t queue_cond;
 
-    msg_node_t *queue_head;
-    msg_node_t *queue_tail;
+    // msg_node_t *queue_head;
+    // msg_node_t *queue_tail;
 
 } client_t;
 

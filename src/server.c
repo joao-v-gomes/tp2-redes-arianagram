@@ -11,7 +11,7 @@
 #include "ifaddrs.h"
 
 // Usado para exibir as msgs de debug
-#define DEBUG
+// #define DEBUG
 
 // Variáveis globais
 int state;
@@ -190,32 +190,33 @@ int waitForClientConnection(int server_socket) {
             break;
         }
     }
-    pthread_mutex_unlock(&clients_mutex);
-
     if (client_index == -1) {
+        pthread_mutex_unlock(&clients_mutex);
         // Sem slots disponíveis
         close(client_socket);
         return ERROR;
     }
 
-    // Inicializar a estrutura do cliente
-    client_t new_client;
-    new_client.active = 1;
-    new_client.client_fd = client_socket;
-    memset(new_client.username, 0, USER_SIZE);
-    new_client.queue_head = NULL;
-    new_client.queue_tail = NULL;
-    pthread_mutex_init(&new_client.queue_mutex, NULL);
-    pthread_cond_init(&new_client.queue_cond, NULL);
+    // Inicializa o slot no array ANTES de criar a thread para evitar corrida.
+    clients[client_index].active = 1;
+    clients[client_index].client_fd = client_socket;
+    memset(clients[client_index].username, 0, USER_SIZE);
+    pthread_mutex_init(&clients[client_index].queue_mutex, NULL);
+    pthread_cond_init(&clients[client_index].queue_cond, NULL);
+    pthread_mutex_unlock(&clients_mutex);
 
-    // Criar thread passando o ÍNDICE do cliente no array
+    // Criar thread passando o índice do cliente no array.
     pthread_t id;
-    pthread_create(&id, NULL, handleClientConnection, (void *)(intptr_t)client_index);
-    new_client.id = id;
+    if (pthread_create(&id, NULL, handleClientConnection, (void *)(intptr_t)client_index) != 0) {
+        pthread_mutex_lock(&clients_mutex);
+        clients[client_index].active = 0;
+        pthread_mutex_unlock(&clients_mutex);
+        close(client_socket);
+        return ERROR;
+    }
 
-    // Adicionar ao array de forma sincronizada
     pthread_mutex_lock(&clients_mutex);
-    clients[client_index] = new_client;
+    clients[client_index].id = id;
     pthread_mutex_unlock(&clients_mutex);
 
 #ifdef DEBUG
@@ -307,29 +308,44 @@ void* handleClientConnection(void *arg) {
             }
             break;
 
-        case RECEIVED_MSG:
+        case RECEIVED_MSG: {
+            // Cliente precisa registrar username via MSG_CONNECT antes de outras mensagens.
+            bool username_registered = false;
+            char stored_username[USER_SIZE];
+            memset(stored_username, 0, sizeof(stored_username));
 
-            // Insere o username do cliente na mensagem recebida para facilitar o debug e o processamento das mensagens.
-            // O username do cliente é armazenado na estrutura do cliente no array global, 
-            // então precisamos acessar o array global de clientes de forma sincronizada para pegar 
-            // o username do cliente que enviou a mensagem.
             pthread_mutex_lock(&clients_mutex);
             if (client_index >= 0 && client_index < MAX_CLIENTS && clients[client_index].active) {
-                // If this is the first message from the client, store the username sent in the message
-                if (clients[client_index].username[0] == '\0' && msg_received.username[0] != '\0') {
-                    strncpy(clients[client_index].username, msg_received.username, USER_SIZE - 1);
-                    clients[client_index].username[USER_SIZE - 1] = '\0';
-                }
-                // If we already have a stored username for this client, prefer it for server-side logs
                 if (clients[client_index].username[0] != '\0') {
-                    strncpy(msg_received.username, clients[client_index].username, USER_SIZE - 1);
-                    msg_received.username[USER_SIZE - 1] = '\0';
+                    username_registered = true;
+                    strncpy(stored_username, clients[client_index].username, USER_SIZE - 1);
+                    stored_username[USER_SIZE - 1] = '\0';
                 }
             }
             pthread_mutex_unlock(&clients_mutex);
 
-            switch (msg_received.type)
-            {
+            if (!username_registered && msg_received.type != MSG_CONNECT) {
+                printf("Cliente %d enviou mensagem sem registrar username (MSG_CONNECT). Encerrando conexão.\n", (int)client_index);
+                pthread_mutex_lock(&clients_mutex);
+                if (client_index >= 0 && client_index < MAX_CLIENTS) {
+                    clients[client_index].active = 0;
+                }
+                pthread_mutex_unlock(&clients_mutex);
+                close(client_fd);
+                return NULL;
+            }
+
+            if (username_registered && msg_received.type != MSG_CONNECT) {
+                strncpy(msg_received.username, stored_username, USER_SIZE - 1);
+                msg_received.username[USER_SIZE - 1] = '\0';
+            }
+
+            switch (msg_received.type) {
+            case MSG_CONNECT:
+                printf("Recebida mensagem de CONNECT do cliente (slot %d): %s\n", (int)client_index, msg_received.username);
+                thread_state = RECEIVED_MSG_CONNECT;
+                break;
+
             case MSG_POST:
                 printf("Recebida mensagem de POST do cliente %s: %s\n", msg_received.username, msg_received.content);
                 thread_state = RECEIVED_MSG_POST;
@@ -350,6 +366,35 @@ void* handleClientConnection(void *arg) {
                 break;
             }
 
+            break;
+        }
+
+        case RECEIVED_MSG_CONNECT:
+            msg_received.username[USER_SIZE - 1] = '\0';
+            if (msg_received.username[0] == '\0') {
+                printf("MSG_CONNECT inválida: username vazio (slot %d). Encerrando conexão.\n", (int)client_index);
+                pthread_mutex_lock(&clients_mutex);
+                if (client_index >= 0 && client_index < MAX_CLIENTS) {
+                    clients[client_index].active = 0;
+                }
+                pthread_mutex_unlock(&clients_mutex);
+                close(client_fd);
+                return NULL;
+            }
+
+            pthread_mutex_lock(&clients_mutex);
+            if (client_index >= 0 && client_index < MAX_CLIENTS && clients[client_index].active) {
+                if (clients[client_index].username[0] == '\0') {
+                    strncpy(clients[client_index].username, msg_received.username, USER_SIZE - 1);
+                    clients[client_index].username[USER_SIZE - 1] = '\0';
+                }
+                strncpy(msg_received.username, clients[client_index].username, USER_SIZE - 1);
+                msg_received.username[USER_SIZE - 1] = '\0';
+            }
+            pthread_mutex_unlock(&clients_mutex);
+
+            printf("Cliente registrado no slot %d como '%s'\n", (int)client_index, msg_received.username);
+            thread_state = WAITING_FOR_MESSAGE;
             break;
 
         case RECEIVED_MSG_POST:
@@ -421,6 +466,18 @@ void sendFeedToClient(int client_socket) {
         messageHostToNetwork(&msg_to_send);
         send(client_socket, &msg_to_send, sizeof(Message), 0);
     }
+
+    sendEndMessageToClient(client_socket);
+
+}
+
+// Enviar mensagem de fim do feed para o cliente com todos os campos zerados, exceto o tipo da mensagem, para indicar que o feed acabou.
+void sendEndMessageToClient(int client_socket) {
+    Message end_msg;
+    memset(&end_msg, 0, sizeof(Message));
+    end_msg.type = MSG_END;
+    messageHostToNetwork(&end_msg);
+    send(client_socket, &end_msg, sizeof(Message), 0);
 }
 
 int getFeedMessages(Message *feed) {
@@ -465,8 +522,9 @@ bool processPostMessage(Message *msg) {
 
     incrementMsgIdCounter();
     msg->msg_id = msg_id_counter;    
-
+#ifdef DEBUG
     printMsg(msg);
+#endif
 
     addMsgToFeed(msg);
 
@@ -485,8 +543,11 @@ bool processFollowMessage(Message *msg) {
 bool processReadMessage(Message *msg, int client_socket) {
     // Aqui você pode implementar o processamento da mensagem de READ
     // Por exemplo, recuperar as mensagens relevantes para o usuário que enviou a mensagem e enviar uma resposta de volta para o cliente com essas mensagens
-    
+
+#ifdef DEBUG
     printMsg(msg);
+#endif
+
     if (client_socket != ERROR) {
         sendFeedToClient(client_socket);
 #ifdef DEBUG
