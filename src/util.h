@@ -52,11 +52,11 @@ typedef struct {
 
     char username[USER_SIZE];
 
+    // Protege escritas no socket deste cliente (thread do poster + thread própria podem escrever concorrentemente)
+    pthread_mutex_t send_mutex;
+
     pthread_mutex_t queue_mutex;
     pthread_cond_t queue_cond;
-
-    // msg_node_t *queue_head;
-    // msg_node_t *queue_tail;
 
 } client_t;
 

@@ -6,6 +6,12 @@
 
 #define MAX_CLIENTS 128
 #define FEED_MAX_SIZE 5
+#define MAX_FOLLOWS (MAX_CLIENTS * MAX_CLIENTS)
+
+typedef struct {
+    char follower[USER_SIZE];  /* quem está seguindo */
+    char followed[USER_SIZE];  /* quem é seguido     */
+} follow_t;
 
 // Estados da FSM do servidor
 #define START_SERVER_STATE 0
@@ -38,12 +44,10 @@ int sendMessageToClient(int client_socket, Message *msg);
 
 bool processPostMessage(Message *msg);
 bool processFollowMessage(Message *msg);
-bool processReadMessage(Message *msg, int client_socket);
-void sendFeedToClient(int client_socket);
-int getSocketByUsername(char *username);
+bool processReadMessage(Message *msg, int client_index);
+void sendFeedToClient(int client_index);
 void addMsgToFeed(Message *msg);
-void incrementMsgIdCounter();
+uint32_t incrementMsgIdCounter();
 int getFeedMessages(Message *feed);
-void sendEndMessageToClient(int client_socket);
 
 #endif // SERVER_H
