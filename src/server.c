@@ -417,7 +417,7 @@ void* handleClientConnection(void *arg) {
     }
 }
 
-// Incrementa e retorna o novo ID de forma atômica, evitando TOCTOU entre threads.
+// Incrementa e retorna o novo ID
 uint32_t incrementMsgIdCounter() {
     pthread_mutex_lock(&msg_id_mutex);
     uint32_t new_id = ++msg_id_counter;
