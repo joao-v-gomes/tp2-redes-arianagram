@@ -12,8 +12,6 @@
 #define SEND_MSG_TO_SERVER_STATE 5
 #define EXIT_STATE 6
 
-
-
 int connectToServer(char *server_ip, int server_port, char *username);
 int validateInfoToConnectToServer(char *server_ip, int server_port, char *username);
 int readMessageFromServer(int client_socket, Message *msg);

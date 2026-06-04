@@ -531,14 +531,17 @@ bool processPostMessage(Message *msg) {
 }
 
 bool processFollowMessage(Message *msg) {
-    // Auto-follow: ignorar silenciosamente.
+    // Auto-follow
+    // Verifica se o usuário está tentando seguir a si mesmo. Se sim, ignora silenciosamente.
     if (strcmp(msg->username, msg->content) == 0) {
         return true;
     }
 
+    //Pega o muter de follow
     pthread_mutex_lock(&follow_mutex);
 
-    // Follow duplicado: ignorar silenciosamente.
+    // Follow duplicado
+    // Verifica se o par (follower, followed) já existe. Se sim, ignora silenciosamente.
     for (int i = 0; i < follow_count; i++) {
         if (strcmp(follow_list[i].follower, msg->username) == 0 &&
             strcmp(follow_list[i].followed, msg->content) == 0) {
@@ -547,7 +550,7 @@ bool processFollowMessage(Message *msg) {
         }
     }
 
-    // Registra o novo follow (o followed pode não estar conectado ainda — tudo bem).
+    // Registra o novo follow (o followed pode não estar conectado ainda).
     if (follow_count < MAX_FOLLOWS) {
         strncpy(follow_list[follow_count].follower, msg->username, USER_SIZE - 1);
         follow_list[follow_count].follower[USER_SIZE - 1] = '\0';

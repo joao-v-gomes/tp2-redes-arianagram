@@ -9,8 +9,8 @@
 #define MAX_FOLLOWS (MAX_CLIENTS * MAX_CLIENTS)
 
 typedef struct {
-    char follower[USER_SIZE];  /* quem está seguindo */
-    char followed[USER_SIZE];  /* quem é seguido     */
+    char follower[USER_SIZE];  // quem está seguindo 
+    char followed[USER_SIZE];  // quem é seguido     
 } follow_t;
 
 // Estados da FSM do servidor
@@ -28,7 +28,6 @@ typedef struct {
 #define RECEIVED_MSG_READ 5
 #define RECEIVED_MSG_CONNECT 7
 
-// Forward declaration da função que roda em thread para cada cliente
 void* handleClientConnection(void *arg);
 int validateInfoToSetUpServer(char *ip, int port);
 int waitForClientConnection(int server_socket);
